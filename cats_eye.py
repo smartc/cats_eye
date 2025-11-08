@@ -232,6 +232,9 @@ def analyze_files(file_list, scale=None, downsample=1,
     for r, v in zip(results, wnorm):
         r["weight"] = round(float(v), 3)
 
+    # sort results by filename
+    results.sort(key=lambda r: r["filename"])
+
     arr = np.array([r["seeing_arcsec"] for r in results])
     summary = {
         "files_processed": len(results),
