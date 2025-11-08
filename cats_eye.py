@@ -98,7 +98,8 @@ def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
         # simple decimation downsample (fast and effective)
         if downsample > 1:
             data = data[::downsample, ::downsample]
-            pixel_scale *= downsample
+            # Note: pixel_scale stays at original value because the FWHM calculation
+            # from flux/peak ratio doesn't scale linearly with downsampling
 
         mean, median, std = sigma_clipped_stats(data, sigma=3.0)
         fwhm_kernel = max(3.0 / downsample, 1.5)
