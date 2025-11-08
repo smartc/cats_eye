@@ -12,6 +12,8 @@ from multiprocessing import cpu_count
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from photutils.detection import DAOStarFinder
+from photutils.segmentation import SourceCatalog
+from photutils.aperture import CircularAperture
 
 
 # ---------------------------------------------------------------------
@@ -45,6 +47,47 @@ def infer_pixel_scale(header):
 
 
 # ---------------------------------------------------------------------
+def compute_star_moments(data, x, y, radius=10):
+    """
+    Compute second moments (covariance matrix) for a star.
+    Returns (moments_cxx, moments_cyy, moments_cxy) or None if failed.
+    """
+    try:
+        # Extract cutout around star
+        x_int, y_int = int(np.round(x)), int(np.round(y))
+        ymin = max(0, y_int - radius)
+        ymax = min(data.shape[0], y_int + radius + 1)
+        xmin = max(0, x_int - radius)
+        xmax = min(data.shape[1], x_int + radius + 1)
+
+        cutout = data[ymin:ymax, xmin:xmax]
+        if cutout.size == 0:
+            return None
+
+        # Create coordinate grids relative to centroid
+        y_grid, x_grid = np.ogrid[ymin:ymax, xmin:xmax]
+        y_grid = y_grid.astype(float) - y
+        x_grid = x_grid.astype(float) - x
+
+        # Subtract local background
+        cutout = cutout - np.median(cutout)
+        cutout = np.maximum(cutout, 0)  # Clip negative values
+
+        total_flux = np.sum(cutout)
+        if total_flux <= 0:
+            return None
+
+        # Compute normalized second moments
+        moments_xx = np.sum(cutout * x_grid * x_grid) / total_flux
+        moments_yy = np.sum(cutout * y_grid * y_grid) / total_flux
+        moments_xy = np.sum(cutout * x_grid * y_grid) / total_flux
+
+        return moments_xx, moments_yy, moments_xy
+    except:
+        return None
+
+
+# ---------------------------------------------------------------------
 def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
                     min_stars=10, threshold_sigma=5.0):
     try:
@@ -64,6 +107,19 @@ def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
         sources = daofind(data)
         if sources is None or len(sources) < min_stars:
             return None
+
+        # --- Compute second moments for shape measurements ---
+        moments_list = []
+        for source in sources:
+            moments = compute_star_moments(data, source['xcentroid'], source['ycentroid'],
+                                          radius=int(3 * fwhm_kernel))
+            moments_list.append(moments if moments else (np.nan, np.nan, np.nan))
+
+        # Add moments to sources table
+        moments_arr = np.array(moments_list)
+        sources['moments_cxx'] = moments_arr[:, 0]
+        sources['moments_cyy'] = moments_arr[:, 1]
+        sources['moments_cxy'] = moments_arr[:, 2]
 
         # --- FWHM computation (restored flux/peak logic) ---
         if 'peak' in sources.colnames and 'flux' in sources.colnames:
@@ -90,13 +146,26 @@ def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
             elong_angle = np.median(ang)
         elif all(c in sources.colnames for c in ("moments_cxx", "moments_cyy", "moments_cxy")):
             cxx, cyy, cxy = sources["moments_cxx"], sources["moments_cyy"], sources["moments_cxy"]
-            term = np.sqrt((cxx - cyy) ** 2 + 4 * cxy ** 2)
-            a = np.sqrt(0.5 * (cxx + cyy + term))
-            b = np.sqrt(0.5 * (cxx + cyy - term))
-            ecc = np.sqrt(1 - (b / a) ** 2)
-            theta = 0.5 * np.degrees(np.arctan2(2 * cxy, cxx - cyy))
-            eccentricity_med = np.median(ecc)
-            elong_angle = np.median(theta)
+
+            # Filter out NaN values and compute shape parameters
+            valid_mask = np.isfinite(cxx) & np.isfinite(cyy) & np.isfinite(cxy)
+            if np.sum(valid_mask) > 0:
+                cxx, cyy, cxy = cxx[valid_mask], cyy[valid_mask], cxy[valid_mask]
+                term = np.sqrt((cxx - cyy) ** 2 + 4 * cxy ** 2)
+                a = np.sqrt(0.5 * (cxx + cyy + term))
+                b = np.sqrt(0.5 * (cxx + cyy - term))
+
+                # Avoid division by zero and invalid values
+                valid_ab = (a > 0) & (b > 0) & (b <= a)
+                if np.sum(valid_ab) > 0:
+                    ecc = np.sqrt(1 - (b[valid_ab] / a[valid_ab]) ** 2)
+                    theta = 0.5 * np.degrees(np.arctan2(2 * cxy[valid_ab], cxx[valid_ab] - cyy[valid_ab]))
+                    eccentricity_med = float(np.median(ecc))
+                    elong_angle = float(np.median(theta))
+                else:
+                    eccentricity_med, elong_angle = 0.0, 0.0
+            else:
+                eccentricity_med, elong_angle = 0.0, 0.0
         else:
             eccentricity_med, elong_angle = 0.0, 0.0
 
