@@ -98,7 +98,8 @@ def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
         # simple decimation downsample (fast and effective)
         if downsample > 1:
             data = data[::downsample, ::downsample]
-            pixel_scale *= downsample
+            # Note: pixel_scale stays at original value because the FWHM calculation
+            # from flux/peak ratio doesn't scale linearly with downsampling
 
         mean, median, std = sigma_clipped_stats(data, sigma=3.0)
         fwhm_kernel = max(3.0 / downsample, 1.5)
@@ -230,6 +231,9 @@ def analyze_files(file_list, scale=None, downsample=1,
     wnorm = (w - np.min(w)) / (rng if rng > 0 else 1)
     for r, v in zip(results, wnorm):
         r["weight"] = round(float(v), 3)
+
+    # sort results by filename
+    results.sort(key=lambda r: r["filename"])
 
     arr = np.array([r["seeing_arcsec"] for r in results])
     summary = {
