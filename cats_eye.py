@@ -68,7 +68,10 @@ def measure_metrics(fits_path, pixel_scale=1.0, downsample=1,
         # --- FWHM computation (restored flux/peak logic) ---
         if 'peak' in sources.colnames and 'flux' in sources.colnames:
             rel = np.sqrt(np.abs(sources['flux'] / np.maximum(sources['peak'], 1)))
-            fwhm_pix = np.median(rel) / 2.35
+            # For 2D Gaussian: flux = 2π * peak * σ_x * σ_y
+            # So: sqrt(flux/peak) = sqrt(2π * σ_x * σ_y)
+            # FWHM = 2.355 * sqrt(σ_x * σ_y) = 2.355 / sqrt(2π) * sqrt(flux/peak)
+            fwhm_pix = np.median(rel) * (2.355 / np.sqrt(2 * np.pi))
         elif 'fwhm' in sources.colnames:
             fwhm_pix = np.median(sources['fwhm'])
         elif 'sigma_x' in sources.colnames and 'sigma_y' in sources.colnames:
